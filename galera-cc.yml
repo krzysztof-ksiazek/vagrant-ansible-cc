@@ -1,0 +1,192 @@
+-   name: Populate galera_nodes group
+
+    hosts: cmon
+    user: vagrant
+    sudo: yes
+    gather_facts: false
+#    serial: 1
+
+    tasks:
+
+    -   debug: msg="test!!!!!!"
+    -   name: Download Severalnines repository key
+        action: command wget http://repo.severalnines.com/severalnines-repos.asc -O /root/severalnines-repos.asc
+
+    -   name: Add Severalnines repository key
+        action: command sudo apt-key add /root/severalnines-repos.asc
+
+    -   name: Create /etc/apt/sources.list.d/s9s-repo.list
+        lineinfile: dest=/etc/apt/sources.list.d/s9s-repo.list regexp='^deb [arch=amd64] http://repo.severalnines.com/deb ubuntu main' line='deb [arch=amd64] http://repo.severalnines.com/deb ubuntu main' create=yes mode=644 state=present 
+
+    -   name: Install ClusterControl
+        apt: pkg=clustercontrol state=latest install_recommends=no update_cache=yes
+
+    -   name: Install bc
+        apt: pkg=bc state=latest install_recommends=no
+
+
+
+-   name: Install vim
+    hosts: all
+    user: vagrant
+    sudo: yes
+    gather_facts: false
+    
+    tasks:
+    -   name: Change source.list
+        replace: dest=/etc/apt/sources.list regexp='(\s+)us\.(\s+.*)?$' replace='\1pl.\2'    
+    -   name: Install vim
+        apt: pkg=vim state=latest install_recommends=no  update_cache=yes
+    -   name: Set up SSH key
+        file: path=/root/.ssh owner=root group=root state=directory
+    -   name: Set up private SSH key
+        template: src=./id_rsa.j2 dest=/root/.ssh/id_rsa
+    -   name: Set up public SSH key
+        template: src=./id_rsa.pub.j2 dest=/root/.ssh/id_rsa.pub
+    -   name: Fix permissions /root/.ssh/authorized_keys
+        file: path=/root/.ssh/authorized_keys owner=root group=root mode=600 state=touch
+    -   name: Setup authorized hosts
+        action: command cp /root/.ssh/id_rsa.pub /root/.ssh/authorized_keys
+    -   name: Fix permissions /root/.ssh/authorized_keys
+        file: path=/root/.ssh/authorized_keys owner=root group=root mode=600 state=file
+    -   name: Fix permissions /root/.ssh/id_rsa
+        file: path=/root/.ssh/id_rsa owner=root group=root mode=600 state=file
+
+
+-   name: Populate galera_nodes group
+
+    hosts: galera
+    user: vagrant
+    sudo: yes
+    gather_facts: true
+    serial: 1
+
+    tasks:
+
+
+    - debug: msg="1 {{ ansible_eth1['ipv4']['address'] }}"
+    - add_host: name={{ ansible_eth1['ipv4']['address'] }} groups=galera_nodes
+    - debug: msg="nodes {{ groups['galera_nodes'] }}"
+
+
+-   name: Configure servers
+    hosts: galera
+    user: vagrant
+    sudo: yes
+    gather_facts: true
+
+    tags:
+    -   config
+    -   configure
+
+    tasks:
+
+    -   name: Add Percona repository
+        action: command apt-key adv --keyserver keys.gnupg.net --recv-keys 1C4CBDCDCD2EFD2A
+
+    -   name: Get Ubuntu version
+        shell: grep main /etc/apt/sources.list | grep -v \# | grep -v "\-security" | grep -v "\-updates" | awk '{print $3}' | uniq
+        register: ubuntu_version
+
+    -   name: Ensure deb entry is in place
+        lineinfile: dest=/etc/apt/sources.list regexp='^deb http://repo.percona.com' line='deb http://repo.percona.com/apt {{ ubuntu_version['stdout_lines'][0] }} main'
+
+    -   name: Ensure deb-src entry is in place
+        lineinfile: dest=/etc/apt/sources.list regexp='^deb-src http://repo.percona.com' line='deb-src http://repo.percona.com/apt {{ ubuntu_version['stdout_lines'][0] }} main'
+
+    -   name: Ensure /etc/mysql/ exists
+        file: path=/etc/mysql state=directory mode=755
+
+    -   name: Check available memory on the host
+        shell: "free -m | grep Mem: | awk '{print $2}'"
+        register: memory
+
+    -   name: Get local IP of the host
+        shell: ip a | grep eth0 | grep inet | awk '{print $2}' | cut -d / -f 1
+#       register: {{ ipaddress['stdout_lines'][0] }}
+        register: ipaddress
+
+    -   name: Create my.cnf from template
+        template: src=./my.cnf.j2 dest=/etc/mysql/my.cnf owner=root group=root mode=0644
+
+    -   name: Generate random server_id
+        lineinfile: dest=/etc/mysql/my.cnf regexp='server_id = [0-9]+.*' line='server_id = {{ 999999|random }}'
+
+
+-   name: Configure first node
+    hosts: ansnode1
+    user: vagrant
+    sudo: yes
+    gather_facts: false
+
+    tasks:
+
+    -   name: Set empty gcomm
+        lineinfile: dest=/etc/mysql/my.cnf regexp='wsrep_cluster_address=gcomm://' line='wsrep_cluster_address=gcomm://'
+
+    -   name: Install Percona XtraDB Cluster
+        apt: pkg=percona-xtradb-cluster-server-5.6 state=latest install_recommends=no update_cache=yes
+
+    -   name: Install python-mysqldb
+        apt: pkg=python-mysqldb state=latest install_recommends=no
+
+    -   name: Remove all root users
+        mysql_user: name=root host=precise64 state=absent
+
+    -   name: Remove all root users
+        mysql_user: name=root host=127.0.0.1 state=absent
+
+    -   name: Remove all root users
+        mysql_user: name=root host='::1' state=absent
+
+    -   name: Remove anonymous users
+        mysql_user: name='' state=absent
+
+    -   name: Remove anonymous users
+        mysql_user: name='' host=precise state=absent
+
+    -   name: Create user
+        mysql_user: name=root host=% password=secretpass priv=*.*:'ALL' state=present
+
+#    -   name: Create user
+#        mysql_user: name=root host=localhost priv=*.*:'ALL' state=present
+
+    -   name: Create SST user
+#        mysql_user: name=sstuser host=localhost password=s3cretPass priv=*.*:'RELOAD,LOCK TABLES,REPLICATION CLIENT' login_password=secretpass login_user=root login_host=127.0.0.1  state=present
+
+        mysql_user: name=sstuser host=localhost password=s3cretPass priv=*.*:'RELOAD,LOCK TABLES,REPLICATION CLIENT' state=present
+#        mysql_user: name=sstuser host=localhost password=s3cretPass priv=*.*:'ALL' state=present
+
+#    -   name: Stop Percona XtraDB Cluster
+#        service: name=mysql state=stopped
+
+    -   name: Create my.cnf from template
+        template: src=./my.cnf.j2 dest=/etc/mysql/my.cnf owner=root group=root mode=0644
+
+    -   name: Generate random server_id
+        lineinfile: dest=/etc/mysql/my.cnf regexp='server_id = [0-9]+.*' line='server_id = {{ 999999|random }}'
+
+
+-   name: Finish configuring servers
+    hosts: galera
+    user: vagrant
+    sudo: yes
+    gather_facts: false
+
+    tasks:
+
+    -   name: Install Percona XtraDB Cluster
+        apt: pkg=percona-xtradb-cluster-server-5.6 state=latest install_recommends=no update_cache=yes
+
+    -   name: Install python-mysqldb
+        apt: pkg=python-mysqldb state=latest install_recommends=no
+
+    -   name: Create user
+        mysql_user: name=root host=% password=secretpass priv=*.*:'ALL' state=present
+
+    -   name: Create SST user
+        mysql_user: name=sstuser host=localhost password=s3cretPass priv=*.*:'RELOAD,LOCK TABLES,REPLICATION CLIENT' state=present
+
+
+    -   name: Start Percona XtraDB Cluster
+        service: name=mysql state=started
